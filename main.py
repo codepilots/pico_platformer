@@ -1,6 +1,6 @@
 """
-Picosystem Platform Game
-A simple 2D platformer game for the Picosystem
+Picosystem Platform Game with Horizontal Scrolling
+A 2D platformer game for the Picosystem with Mario-style camera scrolling
 
 Controls:
 - Left/Right: Move player
@@ -11,7 +11,6 @@ Controls:
 import picosystem
 import math
 import random
-import time
 
 # Game constants
 SCREEN_WIDTH = 120
@@ -19,6 +18,11 @@ SCREEN_HEIGHT = 120
 GRAVITY = 0.5
 JUMP_STRENGTH = -8
 PLAYER_SPEED = 2
+
+# Level constants
+LEVEL_WIDTH = 480  # 4 screens wide
+CAMERA_FOLLOW_SPEED = 0.1  # How smoothly camera follows player
+CAMERA_OFFSET = 40  # Player position relative to left edge of screen
 
 # Colors
 BLACK = (0, 0, 0)        # 0
@@ -29,6 +33,32 @@ BLUE = (0, 0, 15)        # 4
 YELLOW = (15, 15, 0)     # 5
 GRAY = (8, 8, 8)         # 7 (approximate mid-gray)
 BROWN = (8, 4, 0)        # 9 (approximate brown)
+
+class Camera:
+    """Camera system for horizontal scrolling"""
+    
+    def __init__(self):
+        self.x = 0
+        self.target_x = 0
+    
+    def update(self, player_x):
+        """Update camera to follow player"""
+        # Calculate target camera position
+        self.target_x = player_x - CAMERA_OFFSET
+        
+        # Clamp camera to level boundaries
+        self.target_x = max(0, min(self.target_x, LEVEL_WIDTH - SCREEN_WIDTH))
+        
+        # Smooth camera movement
+        self.x += (self.target_x - self.x) * CAMERA_FOLLOW_SPEED
+    
+    def world_to_screen(self, world_x, world_y):
+        """Convert world coordinates to screen coordinates"""
+        return (world_x - self.x, world_y)
+    
+    def is_on_screen(self, world_x, width=0):
+        """Check if an object is visible on screen"""
+        return (world_x + width >= self.x and world_x <= self.x + SCREEN_WIDTH)
 
 class Player:
     """Player character with physics and controls"""
@@ -71,11 +101,11 @@ class Player:
         # Handle collisions
         self.handle_collisions(platforms)
         
-        # Keep player on screen horizontally
+        # Keep player within level boundaries
         if self.x < 0:
             self.x = 0
-        elif self.x + self.width > SCREEN_WIDTH:
-            self.x = SCREEN_WIDTH - self.width
+        elif self.x + self.width > LEVEL_WIDTH:
+            self.x = LEVEL_WIDTH - self.width
     
     def handle_collisions(self, platforms):
         """Handle collision detection with platforms"""
@@ -110,15 +140,19 @@ class Player:
         self.vel_y = 0
         self.on_ground = False
     
-    def draw(self):
+    def draw(self, camera):
         """Draw the player"""
-        picosystem.pen(*BLUE)
-        picosystem.frect(int(self.x), int(self.y), self.width, self.height)
+        screen_x, screen_y = camera.world_to_screen(self.x, self.y)
         
-        # Draw eyes
-        picosystem.pen(*WHITE)
-        picosystem.pixel(int(self.x + 2), int(self.y + 2))
-        picosystem.pixel(int(self.x + 5), int(self.y + 2))
+        # Only draw if on screen
+        if camera.is_on_screen(self.x, self.width):
+            picosystem.pen(*BLUE)
+            picosystem.frect(int(screen_x), int(screen_y), self.width, self.height)
+            
+            # Draw eyes
+            picosystem.pen(*WHITE)
+            picosystem.pixel(int(screen_x + 2), int(screen_y + 2))
+            picosystem.pixel(int(screen_x + 5), int(screen_y + 2))
 
 
 class Platform:
@@ -135,10 +169,20 @@ class Platform:
         """Get rectangle representation for collision detection"""
         return (self.x, self.y, self.width, self.height)
     
-    def draw(self):
+    def draw(self, camera):
         """Draw the platform"""
-        picosystem.pen(*self.color)
-        picosystem.frect(self.x, self.y, self.width, self.height)
+        # Only draw if visible on screen
+        if camera.is_on_screen(self.x, self.width):
+            screen_x, screen_y = camera.world_to_screen(self.x, self.y)
+            picosystem.pen(*self.color)
+            picosystem.frect(int(screen_x), int(screen_y), self.width, self.height)
+            
+            # Add some detail to platforms
+            picosystem.pen(*DARK_BROWN)
+            picosystem.hline(int(screen_x), int(screen_y), self.width)
+            if self.height > 4:
+                picosystem.pen(*LIGHT_BROWN)
+                picosystem.hline(int(screen_x), int(screen_y + 1), self.width)
 
 
 class Collectible:
@@ -151,7 +195,7 @@ class Collectible:
         self.height = 6
         self.collected = False
         self.bob_offset = 0
-        self.tick_counter = 0  # Add tick counter for animation
+        self.tick_counter = 0
     
     def update(self):
         """Update collectible animation using ticks"""
@@ -164,57 +208,83 @@ class Collectible:
         """Get rectangle for collision detection"""
         return (self.x, self.y + self.bob_offset, self.width, self.height)
     
-    def draw(self):
+    def draw(self, camera):
         """Draw the collectible"""
-        if not self.collected:
+        if not self.collected and camera.is_on_screen(self.x, self.width):
+            screen_x, screen_y = camera.world_to_screen(self.x, self.y)
+            y_pos = int(screen_y + self.bob_offset)
+            
             picosystem.pen(*YELLOW)
-            y_pos = int(self.y + self.bob_offset)
-            picosystem.frect(self.x, y_pos, self.width, self.height)
+            picosystem.frect(int(screen_x), y_pos, self.width, self.height)
             
             # Draw shine effect
             picosystem.pen(*WHITE)
-            picosystem.pixel(self.x + 1, y_pos + 1)
+            picosystem.pixel(int(screen_x + 1), y_pos + 1)
 
 
 class Game:
-    """Main game class"""
+    """Main game class with scrolling camera"""
     
     def __init__(self):
-        self.player = Player(20, 80)
+        self.player = Player(50, 80)
+        self.camera = Camera()
         self.platforms = []
         self.collectibles = []
         self.score = 0
         self.setup_level()
     
     def setup_level(self):
-        """Create the level layout"""
-        # Ground platforms
-        self.platforms.append(Platform(0, 110, 40, 10))
-        self.platforms.append(Platform(60, 110, 60, 10))
+        """Create a larger scrolling level layout"""
+        self.platforms.clear()
+        self.collectibles.clear()
         
-        # Mid-level platforms
+        # Ground platforms - create a continuous ground
+        for x in range(0, LEVEL_WIDTH, 60):
+            self.platforms.append(Platform(x, 110, 60, 10))
+        
+        # Starting area platforms
         self.platforms.append(Platform(30, 90, 20, 8))
         self.platforms.append(Platform(70, 80, 25, 8))
-        self.platforms.append(Platform(15, 70, 20, 8))
-        self.platforms.append(Platform(80, 60, 30, 8))
         
-        # Upper platforms
-        self.platforms.append(Platform(10, 50, 25, 8))
-        self.platforms.append(Platform(50, 40, 30, 8))
-        self.platforms.append(Platform(90, 30, 25, 8))
+        # Section 1 (Screen 1-2)
+        self.platforms.append(Platform(120, 95, 30, 8))
+        self.platforms.append(Platform(170, 85, 20, 8))
+        self.platforms.append(Platform(210, 75, 25, 8))
+        self.platforms.append(Platform(160, 65, 15, 8))
+        self.platforms.append(Platform(250, 90, 30, 8))
         
-        # Top platform
-        self.platforms.append(Platform(40, 20, 40, 8))
+        # Section 2 (Screen 2-3) - Higher platforms
+        self.platforms.append(Platform(300, 100, 25, 8))
+        self.platforms.append(Platform(340, 85, 20, 8))
+        self.platforms.append(Platform(280, 70, 15, 8))
+        self.platforms.append(Platform(320, 55, 20, 8))
+        self.platforms.append(Platform(370, 70, 25, 8))
+        self.platforms.append(Platform(410, 55, 20, 8))
         
-        # Add collectibles
-        self.collectibles.append(Collectible(35, 82))
-        self.collectibles.append(Collectible(78, 72))
-        self.collectibles.append(Collectible(20, 62))
-        self.collectibles.append(Collectible(88, 52))
-        self.collectibles.append(Collectible(20, 42))
-        self.collectibles.append(Collectible(65, 32))
-        self.collectibles.append(Collectible(98, 22))
-        self.collectibles.append(Collectible(55, 12))
+        # Section 3 (Screen 3-4) - Challenge area
+        self.platforms.append(Platform(450, 95, 15, 8))
+        self.platforms.append(Platform(420, 80, 15, 8))
+        self.platforms.append(Platform(390, 65, 15, 8))
+        self.platforms.append(Platform(360, 50, 15, 8))
+        self.platforms.append(Platform(330, 35, 15, 8))
+        self.platforms.append(Platform(370, 25, 30, 8))  # Victory platform
+        
+        # Add floating platforms for variety
+        self.platforms.append(Platform(100, 50, 15, 6))
+        self.platforms.append(Platform(180, 45, 15, 6))
+        self.platforms.append(Platform(260, 40, 15, 6))
+        self.platforms.append(Platform(340, 35, 15, 6))
+        
+        # Collectibles spread across the level
+        collectible_positions = [
+            (35, 82), (125, 87), (175, 77), (215, 67), (265, 82),
+            (305, 92), (285, 62), (325, 47), (375, 62), (415, 47),
+            (395, 57), (365, 42), (335, 27), (385, 17), (80, 42),
+            (185, 37), (265, 32), (345, 27), (455, 87), (425, 72)
+        ]
+        
+        for x, y in collectible_positions:
+            self.collectibles.append(Collectible(x, y))
     
     def update(self):
         """Update game state"""
@@ -225,6 +295,9 @@ class Game:
         
         # Update player
         self.player.update(self.platforms)
+        
+        # Update camera to follow player
+        self.camera.update(self.player.x)
         
         # Update collectibles
         for collectible in self.collectibles:
@@ -245,29 +318,46 @@ class Game:
     def restart_level(self):
         """Restart the current level"""
         self.player.reset()
+        self.camera.x = 0
+        self.camera.target_x = 0
         self.score = 0
         for collectible in self.collectibles:
             collectible.collected = False
     
     def draw(self):
-        """Draw the game"""
+        """Draw the game with camera scrolling"""
         # Clear screen
         picosystem.pen(*BLACK)
         picosystem.clear()
         
+        # Draw background elements (optional - could add clouds, etc.)
+        self.draw_background()
+        
         # Draw platforms
         for platform in self.platforms:
-            platform.draw()
+            platform.draw(self.camera)
         
         # Draw collectibles
         for collectible in self.collectibles:
-            collectible.draw()
+            collectible.draw(self.camera)
         
         # Draw player
-        self.player.draw()
+        self.player.draw(self.camera)
         
-        # Draw UI
+        # Draw UI (always on screen)
         self.draw_ui()
+    
+    def draw_background(self):
+        """Draw scrolling background elements"""
+        # Simple parallax background - draw some distant objects
+        for i in range(0, LEVEL_WIDTH, 80):
+            # Background "mountains" that scroll slower than camera
+            bg_x = i - (self.camera.x * 0.3)  # Parallax effect
+            if bg_x > -20 and bg_x < SCREEN_WIDTH + 20:
+                picosystem.pen(*GRAY)
+                # Simple triangle for distant hills
+                for y in range(5):
+                    picosystem.hline(int(bg_x + 10 - y), int(80 + y), y * 2)
     
     def draw_ui(self):
         """Draw user interface elements"""
@@ -275,8 +365,12 @@ class Game:
         picosystem.pen(*WHITE)
         picosystem.text(f"Score: {self.score}", 2, 2)
         
+        # Draw progress indicator
+        progress = min(100, int((self.player.x / LEVEL_WIDTH) * 100))
+        picosystem.text(f"Progress: {progress}%", 2, 12)
+        
         # Draw controls hint
-        # picosystem.text("X: Restart", 2, SCREEN_HEIGHT - 10)
+        picosystem.text("X: Restart", 2, SCREEN_HEIGHT - 10)
         
         # Check for level completion
         all_collected = all(c.collected for c in self.collectibles)
